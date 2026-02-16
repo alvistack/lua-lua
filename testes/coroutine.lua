@@ -493,6 +493,25 @@ assert(not pcall(a, a))
 a = nil
 
 
+do
+  -- bug in 5.4: thread can use message handler higher in the stack
+  -- than the variable being closed
+  local c = coroutine.create(function()
+    local clo <close> = setmetatable({}, {__close=function()
+      local x = 134   -- will overwrite message handler
+      error(x)
+    end})
+    -- yields coroutine but leaves a new message handler for it,
+    -- that would be used when closing the coroutine (except that it
+    -- will be overwritten)
+    xpcall(coroutine.yield, function() return "XXX" end)
+  end)
+
+  assert(coroutine.resume(c))   -- start coroutine
+  local st, msg = coroutine.close(c)
+  assert(not st and msg == 134)
+end
+
 -- access to locals of erroneous coroutines
 local x = coroutine.create (function ()
             local a = 10
@@ -610,18 +629,20 @@ else
     -- (bug in 5.2/5.3)
     c = coroutine.create(function (a, ...)
       T.sethook("yield 0", "l")   -- will yield on next two lines
-      assert(a == 10)
+      local b = a
       return ...
     end)
 
     assert(coroutine.resume(c, 1, 2, 3))   -- start coroutine
     local n,v = debug.getlocal(c, 0, 1)    -- check its local
-    assert(n == "a" and v == 1)
+    assert(n == "a" and v == 1 and debug.getlocal(c, 0, 2) ~= "b")
     assert(debug.setlocal(c, 0, 1, 10))     -- test 'setlocal'
     local t = debug.getinfo(c, 0)        -- test 'getinfo'
-    assert(t.currentline == t.linedefined + 1)
+    assert(t.currentline == t.linedefined + 2)
     assert(not debug.getinfo(c, 1))      -- no other level
     assert(coroutine.resume(c))          -- run next line
+    local n,v = debug.getlocal(c, 0, 2)    -- check next local
+    assert(n == "b" and v == 10)
     v = {coroutine.resume(c)}         -- finish coroutine
     assert(v[1] == true and v[2] == 2 and v[3] == 3 and v[4] == undef)
     assert(not coroutine.resume(c))
